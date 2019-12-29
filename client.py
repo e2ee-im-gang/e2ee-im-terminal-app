@@ -2,6 +2,7 @@ import socket
 import sys
 import json
 import hashlib
+import getpass
 port = 12981
 
 try:
@@ -31,7 +32,7 @@ while(True):
 				req_input = input()
 				to_send['input'] = req_input
 			elif contents['action'] == 'password':
-				req_input = input()
+				req_input = getpass.getpass()
 				to_hash = req_input.encode() + contents['args'][0].encode()
 				print(to_hash)
 				pw_hash = hashlib.sha3_256(to_hash).digest()
