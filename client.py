@@ -32,13 +32,11 @@ while(True):
 				req_input = input()
 				to_send['input'] = req_input
 			elif contents['action'] == 'password':
-				req_input = getpass.getpass()
-				to_hash = req_input.encode() + contents['args'][0].encode()
-				print(to_hash)
+				req_input = getpass.getpass(contents['args'][0])
+				to_hash = req_input.encode() + contents['args'][1].encode()
 				pw_hash = hashlib.sha3_256(to_hash).digest()
 				#convert byte string to utf-8 encodable representation
 				to_send['hash'] = ''.join('{:02x}'.format(c) for c in pw_hash)
-				print(to_send['hash'])
 			elif contents['action'] == 'exit':
 				sock.close()
 				sys.exit(1)
@@ -54,33 +52,38 @@ def request(socket, to_send):
 	rec_obj = json.loads(socket.recv(4096**2).decode())
 	return rec_obj
 
-def handle_cmd(text, convoID):
+def handle_cmd(text, convoID, sock):
 	args = text.split()
 	cmd = args.pop(0)
 	to_send = {}
 	if cmd == 'open':
 		to_send = {'cmd':'open', 'args':args}
 	elif cmd == 'close':
-		if(convoID):
+		if convoID is not None:
 			to_send = {'cmd':'ls', 'args':[]}
 			convoID = None
 		else:
 			print('no conversation to close')
-			continue
+			return None
 	elif cmd == 'ls':
-		if convoID is not None:
+		if convoID is None:
 			to_send = {'cmd':'ls', 'args':args}
 	elif cmd == 'refresh':
 		if convoID is not None:
-			to_send = {'cmd':'refresh', 'args':convoID}
+			to_send = {'cmd':'refresh', 'args':[str(convoID)]}
+	elif cmd == 'newcon':
+		if(len(args) < 2):
+			print('usage: newcon <conversation_name> [username1, username2, ...]')
+		else:
+			to_send = {'cmd':'newcon', 'args':args}
 	else:
-		print('unknown command:' cmd)
+		print('unknown command:', cmd)
 		return convoID
 	response = request(sock, to_send)
 	if('error' in response):
 		print('Error:', response['error'])
 	if('msg' in response):
-		print(msg)
+		print(response['msg'])
 	if('ConversationID' in response):
 		convoID = response['ConversationID']
 	return convoID
@@ -94,9 +97,17 @@ while(True):
 	if convoID is not None:
 		if len(text) > 1:
 			if(text[:2] == '::'):
-				convoID = handle_cmd(text[2:], True)
+				if text[2::] == 'exit':
+					break
+				convoID = handle_cmd(text[2:], convoID, sock)
+				continue
+		response = request(sock, {'msg':text, 'ConversationID':convoID})
+		if ('error' in response):
+			print('Error:', response['error'])
 	else:
-		handle_cmd(text, False)
+		if text == 'exit':
+			break
+		convoID = handle_cmd(text, convoID, sock)
 
 
 

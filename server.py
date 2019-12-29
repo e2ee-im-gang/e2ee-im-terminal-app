@@ -9,6 +9,8 @@ import hashlib
 #at this stage only used with salt so no exploit
 import random
 import string
+import calendar
+import time
 salt_chars = ''.join([string.punctuation, string.ascii_uppercase, string.ascii_lowercase, string.digits])
 salt_len = 5
 db_name = 'mydb.db'
@@ -164,7 +166,7 @@ please enter a username:"""
 	record = db.fetchone()
 	if record is None:
 		client_salt = ''.join(random.choice(salt_chars) for _ in range(salt_len))
-		to_send = {'msg':'Creating new user: {} please enter a password:\n'.format(username), 'action':'password', 'args':[client_salt]}
+		to_send = {'action':'password', 'args':['Creating new user: %s please enter a password:\n' % username,client_salt]}
 		rec_obj = sendrec(conn_info, to_send, expected_rv_keys=['hash'])
 		server_salt = ''.join(random.choice(salt_chars) for _ in range(salt_len))
 		to_hash = rec_obj['hash'].encode() + server_salt.encode()
@@ -174,16 +176,16 @@ please enter a username:"""
 		db.execute('insert into Users (username, hash, client_salt, server_salt) values (?,?,?,?)', (username, pw_hash, client_salt, server_salt))
 	else:
 		authenticated = False
-		msg = 'password:'
+		prompt = 'Password:'
 		while not authenticated:
-			to_send = {'msg':msg, 'action':'password', 'args':[record[3]]}
+			to_send = {'action':'password', 'args':[prompt,record[3]]}
 			rec_obj = sendrec(conn_info, to_send, expected_rv_keys=['hash'])
 			if rec_obj is None:
 				mydb.commit()
 				mydb.close()
 				connection.close()
 				return
-			if(type(rec_obj['hash']) != str):
+			if not isinstance(rec_obj['hash'], str):
 				print('request provided wrong datatype from ({})'.format(address))
 				mydb.commit()
 				mydb.close()
@@ -194,8 +196,9 @@ please enter a username:"""
 			if pw_hash == record[2]:
 				authenticated = True
 				break
-			msg = 'incorrect please re-enter your password:'
-	db.execute("select UserID from Users where username=?", username)
+			prompt = 'Incorrect please re-enter your password:'
+	send(conn_info, {'action':'start_requests', 'msg':'Welcome %s\n' % username})
+	db.execute("select UserID from Users where username=?", (username,))
 	#will never fail as username has been verified to exist
 	#possible race condition when username changing is added
 	user_id = db.fetchone()[0]
@@ -218,9 +221,15 @@ please enter a username:"""
 			if 'args' not in rec_obj:
 				print('invalid request from:', address)
 				send(conn_info, {'error':'missing args'})
+			elif not isinstance(rec_obj['args'], list):
+				print('invalid request from:', address)
+				send(conn_info, {'error':'args TypeError'})
+			elif not all(isinstance(arg, str) for arg in rec_obj['args']):
+				print('invalid request from:', address)
+				send(conn_info, {'error':'args TypeError'})
 			else:
 				if rec_obj['cmd'] == 'open':
-					if len(rec_obj['args'] > 0):
+					if len(rec_obj['args']) > 0:
 						#sqlite sanitises this socket no sqli possible
 						db.execute("select ConversationID from Conversations where name=?",(rec_obj['args'][0],))
 						record = db.fetchone()
@@ -228,37 +237,120 @@ please enter a username:"""
 							send(conn_info, {'error':'no such conversation'})
 						else:
 							conversation_id = record[0]
-							db.execute("select ConversationMappingID from Conversations where UserID=? and ConversationID=?", (user_id, conversation_id))
-							record = db.fetchone()
-							if record is None:
-								send(conn_info, {'error': 'no such conversation'})
+							db.execute("select * from UserConversationMap where UserID=? and ConversationID=?", (user_id, conversation_id))
+							if db.fetchone() is None:
+								send(conn_info, {'error': 'Conversation access restricted'})
 							else:
 								msg = ['Opened Conversation']
 								db.execute("""
-									select Users.username, datetime(senttime, 'unixepoch', 'localtime'), contents
+									select datetime(senttime, 'unixepoch', 'localtime'), Users.username, contents
 									from Messages
-									where ConversationID=?
 									left join Users on Users.UserID=SenderID
+									where ConversationID=?
 									""", (conversation_id,))
 								record = db.fetchone()
 								while(record is not None):
 									msg.append('%s@%s>%s' % record)
-									db.fetchone()
-								msg = '\n'.join(record)
-								send(conn_info, {'msg':msg})
+									record = db.fetchone()
+								msg = '\n'.join(msg)
+								send(conn_info, {'msg':msg, 'ConversationID':conversation_id})
+					else:
+						send(conn_info, {'error', 'argument length incorrect'})
 				elif rec_obj['cmd'] == 'ls':
-					db.execute("select Conversations.name from UserConversationMap where UserID=? left join Conversations on Conversations.ConverationID=ConversationID")
-					msg = []
+					db.execute("""
+						select Conversations.name
+						from UserConversationMap
+						left join Conversations on UserConversationMap.ConversationID=Conversations.ConversationID
+						where UserID=?""", (user_id,))
+					msg = ['Conversations:']
 					record = db.fetchone()
 					while(record is not None):
 						msg.append(record[0])
 						record = db.fetchone()
+					msg = '\n'.join(msg)
+					send(conn_info, {'msg':msg})
 				elif rec_obj['cmd'] == 'refresh':
-					pass
+					if(len(rec_obj['args']) < 1):
+						send(conn_info, {'error':"argument length incorrect"})
+					else:
+						try:
+							conversation_id = int(rec_obj['args'][0])
+						except ValueError:
+							send(conn_info, {'error':'could not convert ConversationID to valid value'})
+							continue
+						db.execute("select * from UserConversationMap where UserID=? and ConversationID=?", (user_id, conversation_id))
+						if(db.fetchone() is not None):
+							msg = []
+							db.execute("""
+								select datetime(senttime, 'unixepoch', 'localtime'), Users.username, contents
+								from Messages
+								left join Users on Users.UserID=SenderID
+								where ConversationID=?
+								""", (conversation_id,))
+							record = db.fetchone()
+							while(record is not None):
+								msg.append('%s@%s>%s' % record)
+								record = db.fetchone()
+							msg = '\n'.join(msg)
+							send(conn_info, {'msg':msg})
+						else:
+							send(conn_info, {'error':'Conversation access restricted'})
+				elif rec_obj['cmd'] == 'newcon':
+					if(len(rec_obj['args']) > 1):
+						conversation_name = rec_obj['args'][0]
+						#sqlite sanitizes this
+						db.execute("select * from Conversations where name=?", (conversation_name,))
+						if db.fetchone() is not None:
+							send(conn_info, {'error':'Conversation name is not unique'})
+						else:
+							false_users = set()
+							correct_users = set()
+							correct_users.add(username)
+							for arg in rec_obj['args'][1:]:
+								#sqlite sanitizes this
+								db.execute("select * from Users where username=?", (arg,))
+								if db.fetchone() is None:
+									false_users.add(arg)
+								else:
+									correct_users.add(arg)
+							if(len(false_users) == 0):
+								db.execute("insert into Conversations (name) values (?)", (conversation_name,))
+								db.execute("select ConversationID from Conversations where name=?", (conversation_name,))
+								conversation_id = db.fetchone()[0]
+								for user in correct_users:
+									db.execute("select UserID from Users where username=?", (user,))
+									tempid = db.fetchone()[0]
+									db.execute("insert into UserConversationMap (UserID, ConversationID) values (?,?)", (tempid, conversation_id))
+								send(conn_info, {'msg': 'Conversation "%s" successfully created' % conversation_name})
+							else:
+								msg = 'User%s %s were not found' % ('s' if len(false_users) > 1 else '', ' '.join(false_users))
+								send(conn_info, {'error': msg})
+					else:
+						send(conn_info, {'error': 'argument length incorrect'})
 				else:
 					print('unknown cmd:', rec_obj['cmd'])
 					send(conn_info, {'error':'unknown cmd'})
-
+		elif 'msg' in rec_obj:
+			#this is where encryption needs to be added
+			if 'ConversationID' not in rec_obj:
+				print('invalid request from:', address)
+				send(conn_info, {'error': 'missing ConversationID'})
+			elif not isinstance(rec_obj['ConversationID'], int):
+				print('invalid request from:', address)
+				send(conn_info, {'error': 'ConversationID TypeError'})
+			else:
+				conversation_id = rec_obj['ConversationID']
+				db.execute("select * from UserConversationMap where UserID=? and ConversationID=?", (user_id, conversation_id))
+				if(db.fetchone() is not None):
+					senttime = calendar.timegm(time.gmtime())
+					db.execute("insert into Messages (SenderID, ConversationID, senttime, contents) values (?,?,?,?)",
+						(user_id, conversation_id, senttime, rec_obj['msg']))
+					send(conn_info, {'status':200})
+				else:
+					send(conn_info, {'error':'Conversation access restricted'})
+		else:
+			print('invalid request from:', address)
+			send(conn_info, {'error':'invalid_request'})
 
 	connection.close()
 	mydb.commit()
@@ -275,6 +367,7 @@ class Threadsafe_Container:
 		self.lock.acquire()
 		self.data = new_val
 		self.lock.release()
+	#this leads to deadlock in container == container comparison
 	def __eq__(self, other):
 		self.lock.acquire()
 		rv = self.data == other
