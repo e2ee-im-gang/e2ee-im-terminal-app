@@ -174,6 +174,7 @@ please enter a username:"""
 		#convert byte string to utf-8 encodable representation
 		hash_str = ''.join('{:02x}'.format(c) for c in pw_hash)
 		db.execute('insert into Users (username, hash, client_salt, server_salt) values (?,?,?,?)', (username, pw_hash, client_salt, server_salt))
+		mydb.commit()
 	else:
 		authenticated = False
 		prompt = 'Password:'
@@ -321,9 +322,10 @@ please enter a username:"""
 									db.execute("select UserID from Users where username=?", (user,))
 									tempid = db.fetchone()[0]
 									db.execute("insert into UserConversationMap (UserID, ConversationID) values (?,?)", (tempid, conversation_id))
+								mydb.commit()
 								send(conn_info, {'msg': 'Conversation "%s" successfully created' % conversation_name})
 							else:
-								msg = 'User%s %s were not found' % ('s' if len(false_users) > 1 else '', ' '.join(false_users))
+								msg = 'User%s %s %s not found' % ('s' if len(false_users) > 1 else '', ' '.join(false_users), 'were' if len(false_users) > 1 else 'was')
 								send(conn_info, {'error': msg})
 					else:
 						send(conn_info, {'error': 'argument length incorrect'})
@@ -345,6 +347,7 @@ please enter a username:"""
 					senttime = calendar.timegm(time.gmtime())
 					db.execute("insert into Messages (SenderID, ConversationID, senttime, contents) values (?,?,?,?)",
 						(user_id, conversation_id, senttime, rec_obj['msg']))
+					mydb.commit()
 					send(conn_info, {'status':200})
 				else:
 					send(conn_info, {'error':'Conversation access restricted'})

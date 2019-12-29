@@ -4,6 +4,19 @@ import json
 import hashlib
 import getpass
 port = 12981
+help_string = """
+TERMINAL-IM-APP-CLIENT v0.1
+
+Commands:
+ls\tlists conversations
+open <conversation_name>\t opens a conversation
+close\t closes current conversation
+newcon <conversation_name> <user1> [user1 user2 ...]\t creates new conversation
+refresh\t reloads the contents of the conversation
+
+To enter a command when a conversation is open prepend the command with ::
+Example... ::refresh
+"""
 
 try:
 	sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -68,14 +81,24 @@ def handle_cmd(text, convoID, sock):
 	elif cmd == 'ls':
 		if convoID is None:
 			to_send = {'cmd':'ls', 'args':args}
+		else:
+			print('close conversation to view other conversations')
+			return convoID
 	elif cmd == 'refresh':
 		if convoID is not None:
 			to_send = {'cmd':'refresh', 'args':[str(convoID)]}
+		else:
+			print('refresh requires an open conversation')
+			return convoID
 	elif cmd == 'newcon':
 		if(len(args) < 2):
 			print('usage: newcon <conversation_name> [username1, username2, ...]')
+			return convoID
 		else:
 			to_send = {'cmd':'newcon', 'args':args}
+	elif cmd == 'help':
+		print(help_string)
+		return convoID
 	else:
 		print('unknown command:', cmd)
 		return convoID
