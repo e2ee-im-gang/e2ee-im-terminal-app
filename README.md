@@ -18,11 +18,12 @@ Users:
     username
     hash
     client_salt
+    keygen_salt
     server_salt
 Devices:
     DeviceID PK
     UserID FK
-    RSAKey
+    PublicKey
 Conversations:
     ConversationID PK
     name
