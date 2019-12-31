@@ -3,7 +3,8 @@ import sys
 import json
 import hashlib
 import getpass
-from nacl import PrivateKey, PublicKey, SealedBox
+from nacl.public import PrivateKey, PublicKey, SealedBox
+import traceback
 port = 12981
 help_string = """
 TERMINAL-IM-APP-CLIENT v0.1
@@ -53,7 +54,7 @@ while(True):
 				to_send['hash'] = ''.join('{:02x}'.format(c) for c in pw_hash)
 				to_hash = req_input.encode() + contents['args'][2].encode()
 				seed_hash = hashlib.sha3_256(to_hash).digest()
-				priv_key = PrivateKey.fromseed(seed_hash)
+				priv_key = PrivateKey.from_seed(seed_hash)
 				to_send['PublicKey'] = ''.join('{:02x}'.format(c) for c in bytes(priv_key.public_key))
 			elif contents['action'] == 'password':
 				req_input = getpass.getpass(contents['args'][0])
@@ -61,9 +62,9 @@ while(True):
 				pw_hash = hashlib.sha3_256(to_hash).digest()
 				#convert byte string to utf-8 encodable representation
 				to_send['hash'] = ''.join('{:02x}'.format(c) for c in pw_hash)
-				to_hash = req_input.encode() + contents['args'][3].encode()
+				to_hash = req_input.encode() + contents['args'][2].encode()
 				seed_hash = hashlib.sha3_256(to_hash).digest()
-				priv_key = PrivateKey.fromseed(seed_hash)
+				priv_key = PrivateKey.from_seed(seed_hash)
 			elif contents['action'] == 'exit':
 				sock.close()
 				sys.exit(1)
@@ -72,6 +73,7 @@ while(True):
 		sock.send(json.dumps(to_send).encode())
 	except Exception as e:
 		print(e)
+		traceback.print_exc(file=sys.stdout)
 		sys.exit(1)
 
 def request(socket, to_send):
@@ -79,10 +81,15 @@ def request(socket, to_send):
 	rec_obj = json.loads(socket.recv(4096**2).decode())
 	return rec_obj
 
+def hex_str_to_bytes(hex_str):
+	return bytes([int(hex_str[i:i+2], 16) for i in range(0,len(hex_str),2)])
+
 PublicKeys = {}
 #using priv_key and public keys as global variables for now
 #look to refactor later
 def handle_cmd(text, convoID, sock):
+	global PublicKeys
+	global priv_key
 	args = text.split()
 	cmd = args.pop(0)
 	to_send = {}
@@ -120,6 +127,7 @@ def handle_cmd(text, convoID, sock):
 		print('unknown command:', cmd)
 		return convoID
 	response = request(sock, to_send)
+	#print(response)
 	if('error' in response):
 		print('Error:', response['error'])
 	if('msg' in response):
@@ -127,9 +135,10 @@ def handle_cmd(text, convoID, sock):
 	if('ConversationID' in response):
 		convoID = response['ConversationID']
 	if('messages' in response):
-		for message in messages:
-			contents = SealedBox(priv_key).decrypt(message['digest'])
-			print('%s@%s>%s' % (message['senttime'],message['username'],contents))
+		for message in response['messages']:
+			byte_str = hex_str_to_bytes(message['digest'])
+			contents = SealedBox(priv_key).decrypt(byte_str).decode()
+			print('%s@%s> %s' % (message['senttime'],message['username'],contents))
 	if('PublicKeys' in response):
 		PublicKeys = response['PublicKeys']
 	return convoID
@@ -148,8 +157,8 @@ while(True):
 				continue
 		digests = {}
 		for device_id in PublicKeys:
-			key = bytes([int(PublicKeys[device_id][i:i+2] for i in range(0,len(PublicKeys[device_id], 2)))])
-			digests[device_id] = ''.join('{:02x}'.format(x) for x in SealedBox(key).encrypt(text))
+			key = hex_str_to_bytes(PublicKeys[device_id])
+			digests[device_id] = ''.join('{:02x}'.format(x) for x in SealedBox(PublicKey(key)).encrypt(text.encode()))
 		response = request(sock, {'digests':digests, 'ConversationID':convoID})
 		if ('error' in response):
 			print('Error:', response['error'])

@@ -36,7 +36,7 @@ def setup_db():
 		db.execute("""
 			create table Devices
 			(DeviceID INTEGER PRIMARY KEY AUTOINCREMENT,
-			DeviceName TEXT NOT NULL,
+			name TEXT NOT NULL,
 			UserID INTEGER NOT NULL,
 			PublicKey TEXT NOT NULL,
 			FOREIGN KEY(UserID) REFERENCES Users(UserID))
@@ -241,12 +241,13 @@ def _exec_cmd_open(conn_info, user_info, rec_obj, db_info):
 		db.execute("select DeviceID, PublicKey from Devices where UserID=?",(user_ids[i],))
 		record = db.fetchone()
 		while(record is not None):
-			public_keys[record[0]] = ''.join('{:02x}'.format(x) for x in record[1])
+			public_keys[record[0]] = record[1]
 			record = db.fetchone()
 	send(conn_info, {'msg':msg, 'ConversationID':conversation_id, 'messages':list(x.data for x in messages), 'PublicKeys':public_keys})
 
-def _exec_cmd_ls(conn_info, user_info, rec_obj):
+def _exec_cmd_ls(conn_info, user_info, rec_obj, db_info):
 	user_id, device_id = user_info
+	mydb, db = db_info
 	db.execute("""
 		select Conversations.name
 		from UserConversationMap
@@ -311,7 +312,8 @@ def _exec_cmd_newcon(conn_info, user_info, rec_obj, db_info):
 		return
 	false_users = set()
 	correct_users = set()
-	correct_users.add(username)
+	db.execute("select username from Users where UserID=?", (user_id,))
+	correct_users.add(db.fetchone()[0])
 	for arg in rec_obj['args'][1:]:
 		db.execute("select * from Users where username=?", (arg,))
 		if db.fetchone() is None:
@@ -352,7 +354,7 @@ def _exec_cmd(conn_info, user_info, rec_obj, db_info):
 	if rec_obj['cmd'] == 'open':
 		_exec_cmd_open(conn_info, user_info, rec_obj, db_info)
 	elif rec_obj['cmd'] == 'ls':
-		_exec_cmd_ls(conn_info, user_info, rec_obj)
+		_exec_cmd_ls(conn_info, user_info, rec_obj, db_info)
 	elif rec_obj['cmd'] == 'refresh':
 		_exec_cmd_refresh(conn_info, user_info, rec_obj, db_info)
 	elif rec_obj['cmd'] == 'newcon':
@@ -383,7 +385,7 @@ def _store_digests(conn_info, user_info, rec_obj, db_info):
 	if(db.fetchone() is None):
 		send(conn_info, {'error':'Conversation access restricted'})
 		return
-	db.execute("select UserID from UserConversationMap where ConversationID=?", (conversation_id))
+	db.execute("select UserID from UserConversationMap where ConversationID=?", (conversation_id,))
 	record = db.fetchone()
 	user_ids = []
 	while(record is not None):
@@ -391,17 +393,17 @@ def _store_digests(conn_info, user_info, rec_obj, db_info):
 		record = db.fetchone()
 	id_set = set()
 	for i in range(len(user_ids)):
-		db.execute("select DeviceID from Devices where UserID=?",(user_ids[i]))
+		db.execute("select DeviceID from Devices where UserID=?",(user_ids[i],))
 		record = db.fetchone()
 		while(record is not None):
-			id_set.add(record[0])
+			id_set.add(str(record[0]))
 			record = db.fetchone()
 	if set(rec_obj['digests'].keys()) != id_set:
 		send(conn_info, {'error': 'digest keys did not match conversation keys'})
 		return
 	senttime = calendar.timegm(time.gmtime())
-	db.execute("insert into Messages (SenderID, ConversationID, senttime, contents) values (?,?,?,?)",
-		(user_id, conversation_id, senttime, rec_obj['digests']))
+	db.execute("insert into Messages (SenderID, ConversationID, senttime) values (?,?,?)",
+		(user_id, conversation_id, senttime))
 	message_id = db.lastrowid
 	for key in rec_obj['digests']:
 		db.execute("insert into Digests (MessageID, DeviceID, contents) values (?,?,?)", (message_id, key, rec_obj['digests'][key]))
@@ -460,11 +462,11 @@ please enter a username:"""
 		pw_hash = hashlib.sha3_256(to_hash).digest()
 		#convert byte string to utf-8 encodable representation
 		hash_str = ''.join('{:02x}'.format(c) for c in pw_hash)
-		db.execute('insert into Users (username, hash, client_salt, keygen_salt, server_salt) values (?,?,?,?)', (username, pw_hash, client_salt, keygen_salt, server_salt))
+		db.execute('insert into Users (username, hash, client_salt, keygen_salt, server_salt) values (?,?,?,?,?)', (username, pw_hash, client_salt, keygen_salt, server_salt))
 		db.execute('select UserID from Users where username=?', (username,))
 		record = db.fetchone()
 		user_id = record[0]
-		db.execute('insert into Devices (DeviceName, UserID, PublicKey) values (?,?,?)',('Browser',user_id,rec_obj['PublicKey']))
+		db.execute('insert into Devices (name, UserID, PublicKey) values (?,?,?)',('Browser',user_id,rec_obj['PublicKey']))
 		mydb.commit()
 	else:
 		authenticated = False
